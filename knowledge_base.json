@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {
   "banana leaf spot": "Use Mancozeb spray once a week.",
   "rice blast": "Apply Tricyclazole 0.6 gm/litre.",
@@ -5,3 +6,12 @@
   "tomato early blight": "Use Chlorothalonil fungicide.",
   "paddy brown spot": "Apply Carbendazim at 1 gm/litre."
 }
+=======
+{
+  "banana leaf spot": "Use Mancozeb spray once a week.",
+  "rice blast": "Apply Tricyclazole 0.6 gm/litre.",
+  "coconut mite": "Spray neem oil 2% solution.",
+  "tomato early blight": "Use Chlorothalonil fungicide.",
+  "paddy brown spot": "Apply Carbendazim at 1 gm/litre."
+}
+>>>>>>> c1120c78a366b159ee63843eef89e19b2810b4a1
