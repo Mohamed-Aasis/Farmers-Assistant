@@ -4,9 +4,10 @@ import pyttsx3
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
-import requests  # For weather API
-from PIL import Image  # For image upload handling
-import time  # For animations
+import requests
+from PIL import Image
+import sqlite3
+import time
 
 # ---------------------------
 # LOAD ENV FILE (for API Keys)
@@ -21,6 +22,19 @@ genai.configure(api_key=api_key)
 weather_api_key = os.getenv("OPENWEATHER_API_KEY")
 if not weather_api_key:
     st.warning("OPENWEATHER_API_KEY not set. Weather feature limited.")
+
+# ---------------------------
+# DATABASE SETUP
+# ---------------------------
+conn = sqlite3.connect('agrisense.db', check_same_thread=False)
+c = conn.cursor()
+
+# Create tables if not exist
+c.execute('''CREATE TABLE IF NOT EXISTS chats
+             (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT, role TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+c.execute('''CREATE TABLE IF NOT EXISTS alerts
+             (id INTEGER PRIMARY KEY AUTOINCREMENT, alert_type TEXT, message TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+conn.commit()
 
 # ---------------------------
 # TEXT-TO-SPEECH ENGINE INITIALIZATION
@@ -39,6 +53,36 @@ def speak(text):
         engine.endLoop()
         engine.say(text)
         engine.runAndWait()
+
+# ---------------------------
+# EMAIL FUNCTION (Optional)
+# ---------------------------
+def send_email(to_email, subject, body):
+    try:
+        smtp_server = st.secrets.get("smtp", {}).get("server")
+        smtp_port = st.secrets.get("smtp", {}).get("port")
+        sender_email = st.secrets.get("smtp", {}).get("sender")
+        sender_password = st.secrets.get("smtp", {}).get("password")
+
+        if not all([smtp_server, smtp_port, sender_email, sender_password]):
+            st.warning("Email functionality disabled: SMTP secrets not found. Check secrets.toml.")
+            return False
+
+        message = MIMEMultipart()
+        message["From"] = sender_email
+        message["To"] = to_email
+        message["Subject"] = subject
+        message.attach(MIMEText(body, "plain"))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, to_email, message.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"Error sending email: {str(e)}")
+        return False
 
 # ---------------------------
 # ENHANCED FUNCTIONS
@@ -72,19 +116,28 @@ def analyze_soil_health(nitrogen, phosphorus, potassium):
     health = "Healthy" if all(x > 20 for x in [nitrogen, phosphorus, potassium]) else "Needs Improvement"
     return f"Soil Health: {health}\nNitrogen: {nitrogen}%, Phosphorus: {phosphorus}%, Potassium: {potassium}%\nAdvice: {'Add organic manure' if health == 'Needs Improvement' else 'Maintain current practices'}"
 
-def analyze_crop_image(uploaded_file):
+def analyze_crop_image(uploaded_file, language):
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
         image = Image.open(uploaded_file)
-        prompt = "Analyze this crop image for diseases, pests, or issues. Provide detailed diagnosis, remedies, and prevention tips as AgriSense for SIH."
+        prompt = f"Analyze this crop image for diseases, pests, or issues. Provide detailed diagnosis, remedies, and prevention tips as AgriSense. Respond in {language}."
         response = model.generate_content([prompt, image])
         return response.text
     except Exception as e:
         return f"Error analyzing image: {str(e)}"
 
 def get_market_price(crop):
-    # Placeholder for API (e.g., Agmarknet or custom API)
     return f"Market Price for {crop}: Approx. ₹50/kg (Check local markets for real-time data)"
+
+def get_ai_response(prompt, language):
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(
+            f"You are AgriSense, an advanced AI farming assistant. Provide detailed, expert advice on crops, weather impacts, soil health, pest control, market trends, and general agriculture queries. Include practical remedies and local context (e.g., India, 09:40 PM IST, Sep 15, 2025). Respond in {language} with a friendly, authoritative tone.\nUser: {prompt}"
+        )
+        return response.text
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
 
 # ---------------------------
 # CUSTOM CSS FOR ENHANCED AESTHETICS
@@ -92,7 +145,7 @@ def get_market_price(crop):
 st.markdown("""
     <style>
     .stApp {
-        background: linear-gradient(135deg, #00C9FF 0%, #92FE9D 100%);  /* Blue-to-green gradient */
+        background: linear-gradient(135deg, #00C9FF 0%, #92FE9D 100%);
         font-family: 'Arial', sans-serif;
         color: black;
         animation: fadeIn 1s ease-in;
@@ -102,7 +155,7 @@ st.markdown("""
         to { opacity: 1; }
     }
     .user-message {
-        background-color: #FF9F55;  /* Warm orange */
+        background-color: #FF9F55;
         color: black;
         padding: 15px;
         border-radius: 20px;
@@ -112,8 +165,8 @@ st.markdown("""
         font-size: 16px;
     }
     .assistant-message {
-        background-color: #6A1B9A;  /* Deep purple */
-        color: white;  /* White for contrast on dark background */
+        background-color: #6A1B9A;
+        color: white;
         padding: 15px;
         border-radius: 20px;
         margin: 10px;
@@ -121,19 +174,19 @@ st.markdown("""
         box-shadow: 4px 4px 10px rgba(0,0,0,0.2);
         font-size: 16px;
     }
-    .stTextArea > div > div > textarea {
+    .stTextArea > div > div > textarea, .stChatInput > div > div > textarea {
         border: 2px solid #FF9F55;
         border-radius: 15px;
         padding: 20px;
-        color: #333333;  /* Dark gray for visibility against light background */
-        background-color: rgba(255, 255, 255, 0.9);  /* Semi-transparent white background */
+        color: black;
+        background-color: white;
         font-size: 18px;
-        height: 150px;  /* Increased height */
-        width: 100%;  /* Full width in wide layout */
+        height: 150px;
+        width: 100%;
     }
     .stButton > button {
         background: linear-gradient(135deg, #FF9F55, #6A1B9A);
-        color: white;  /* White for contrast */
+        color: white;
         border-radius: 15px;
         padding: 12px 24px;
         font-size: 16px;
@@ -146,7 +199,7 @@ st.markdown("""
         color: white;
     }
     h1, h3 {
-        color: #FFD700;  /* Bright gold */
+        color: #FFD700;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
     }
     p {
@@ -179,28 +232,65 @@ st.markdown("""
 # PAGE CONFIG
 # ---------------------------
 st.set_page_config(
-    page_title="AgriSense — AI Farming Assistant (SIH)",
+    page_title="AgriSense — AI Farming Assistant",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ---------------------------
-# SIDEBAR FOR ENHANCED FEATURES
+# INITIALIZE SESSION STATE
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Load chat history from DB (general, no user-specific)
+c.execute("SELECT role, message FROM chats ORDER BY timestamp ASC")
+st.session_state.messages = [{"role": row[0], "content": row[1]} for row in c.fetchall()]
+
+# Dashboard metrics (aggregate for all interactions)
+c.execute("SELECT COUNT(*) FROM chats WHERE role = 'assistant'")
+queries_solved = c.fetchone()[0]
+c.execute("SELECT COUNT(*) FROM alerts")
+weather_alerts = c.fetchone()[0]
+c.execute("SELECT COUNT(DISTINCT DATE(timestamp)) FROM chats")  # Approx users by unique days
+users_today = c.fetchone()[0]
+
+# ---------------------------
+# DASHBOARD
+# ---------------------------
+st.subheader("📊 Farmer Dashboard")
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown(f'<div class="dashboard-metric">Users Today: {users_today}</div>', unsafe_allow_html=True)
+with col2:
+    st.markdown(f'<div class="dashboard-metric">Weather Alerts: {weather_alerts}</div>', unsafe_allow_html=True)
+with col3:
+    st.markdown(f'<div class="dashboard-metric">Queries Solved: {queries_solved}</div>', unsafe_allow_html=True)
+
+# ---------------------------
+# SIDEBAR
 # ---------------------------
 st.sidebar.title("🌾 AgriSense Control Panel")
-st.sidebar.markdown("**Smart India Hackathon (SIH) Edition**")
 st.sidebar.markdown("### Quick Tools")
+enable_email = st.sidebar.checkbox("Enable Email Alerts (Requires secrets.toml)", value=False)
+enable_tts = st.sidebar.checkbox("Enable Text-to-Speech", value=True)  # New TTS toggle
 if st.sidebar.button("🌤️ Weather"):
     city = st.sidebar.text_input("City:", "Mumbai")
     weather = get_weather(city)
     st.sidebar.info(weather)
+    if weather.startswith("Weather"):
+        c.execute("INSERT INTO alerts (alert_type, message) VALUES ('weather', ?)", (weather,))
+        conn.commit()
+        if enable_email and send_email("default@example.com", "Weather Alert", weather):
+            st.sidebar.success("Weather alert emailed!")
+        else:
+            st.sidebar.warning("Email not sent. Enable email alerts and configure secrets.toml.")
 
 st.sidebar.markdown("### Crop & Soil Tools")
 season = st.sidebar.selectbox("Season:", ["Summer", "Winter", "Monsoon"])
 soil = st.sidebar.selectbox("Soil Type:", ["Sandy", "Loamy", "Clayey"])
-irrigation = st.sidebar.selectbox("Irrigation:", ["Low", "Moderate", "High"])
+irr = st.sidebar.selectbox("Irrigation:", ["Low", "Moderate", "High"])
 if st.sidebar.button("Crop Advice"):
-    rec = get_crop_recommendation(season, soil, irrigation)
+    rec = get_crop_recommendation(season, soil, irr)
     st.sidebar.success(rec)
 
 st.sidebar.markdown("### Soil Health")
@@ -219,39 +309,20 @@ if st.sidebar.button("Check Price"):
 
 st.sidebar.markdown("### Settings")
 offline_mode = st.sidebar.checkbox("Offline Mode (Limited Features)")
-language = st.sidebar.selectbox("Language:", ["English", "Hindi", "Telugu"])
-st.sidebar.markdown("### SIH Info")
-st.sidebar.markdown("""
-- **Team**: AgriSense Innovators
-- **Focus**: Farmer Empowerment, AI-Driven Insights
-- **Features**: Chat, Voice, Image, Weather, Soil, Market
-- **Innovation**: Scalable, Offline-Ready, Multi-Lingual
-""")
+language = st.sidebar.selectbox("Language:", ["English", "Malayalam", "Hindi", "Telugu"])
 
 # ---------------------------
 # HEADER
 # ---------------------------
 st.markdown("""
     <h1 style='text-align: center;'>
-        🌱 AgriSense — AI Farming Assistant (SIH 2025)
+        🌱 AgriSense — AI Farming Assistant
     </h1>
     <p style='text-align: center;'>
         Empowering Farmers with AI: Chat, Voice, Image Analysis, Weather, Soil & Market Insights! 🌾🚀
     </p>
     <hr style='border-color: #FFD700; border-width: 2px;'>
 """, unsafe_allow_html=True)
-
-# ---------------------------
-# DASHBOARD (SIH Expansion)
-# ---------------------------
-st.subheader("📊 Farmer Dashboard")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown('<div class="dashboard-metric">Users Today: 150</div>', unsafe_allow_html=True)
-with col2:
-    st.markdown('<div class="dashboard-metric">Weather Alerts: 5</div>', unsafe_allow_html=True)
-with col3:
-    st.markdown('<div class="dashboard-metric">Queries Solved: 200</div>', unsafe_allow_html=True)
 
 # ---------------------------
 # FEATURE CARDS
@@ -271,50 +342,19 @@ with col4:
 # IMAGE UPLOAD SECTION
 # ---------------------------
 st.subheader("📷 Upload Crop Image for Analysis")
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
-if uploaded_file is not None:
+uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"], key="image_uploader")
+if uploaded_file is not None and "image_processed" not in st.session_state:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
     if st.button("Analyze Image"):
-        analysis = analyze_crop_image(uploaded_file)
+        analysis = analyze_crop_image(uploaded_file, language)
         st.markdown(f'<div class="assistant-message">{analysis}</div>', unsafe_allow_html=True)
-        speak(analysis)
-
-# ---------------------------
-# SESSION STATE
-# ---------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello 👋 I’m AgriSense, your SIH-powered farming assistant. Ask about crops, weather, soil, or upload images! How can I assist?"}
-    ]
-
-# ---------------------------
-# SPEECH-TO-TEXT FUNCTION
-# ---------------------------
-def recognize_speech():
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        st.info("🎤 Listening... speak now!")
-        audio = r.listen(source)
-        try:
-            return r.recognize_google(audio)
-        except sr.UnknownValueError:
-            return "Sorry, I couldn't understand your voice."
-        except sr.RequestError:
-            return "Sorry, voice service is down."
-
-# ---------------------------
-# GET RESPONSE FROM GEMINI
-# ---------------------------
-def get_ai_response(prompt):
-    try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(
-            f"You are AgriSense, an advanced AI farming assistant for SIH 2025. Provide detailed, expert advice on crops, weather impacts, soil health, pest control, market trends, and general agriculture queries. Include practical remedies and local context (e.g., India, 08:23 PM IST, Sep 15, 2025). Respond in a friendly, authoritative tone.\nUser: {prompt}"
-        )
-        return response.text
-    except Exception as e:
-        return f"⚠️ Error: {str(e)}"
+        c.execute("INSERT INTO chats (message, role) VALUES (?, 'assistant')", (analysis,))
+        conn.commit()
+        if enable_tts:
+            speak(analysis)
+        st.session_state.image_processed = True
+        st.rerun()
 
 # ---------------------------
 # CHAT DISPLAY
@@ -335,42 +375,55 @@ for message in st.session_state.messages:
         """, unsafe_allow_html=True)
 
 # ---------------------------
-# INPUT AREA
+# SINGLE INPUT AREA (Grok-like)
 # ---------------------------
-st.markdown("### 💬 Ask Your Detailed Question")
-user_input = st.text_area("You:", "", key="text_input", placeholder="Enter a detailed query... e.g., 'How to manage banana leaf spot in monsoon with loamy soil in India?'", height=150)
+st.markdown("### 💬 Ask Your Question")
+col_input, col_voice, col_file = st.columns([6, 1, 1])
+with col_input:
+    user_input = st.chat_input("Type, speak, or upload file here...", key="chat_input")
 
-col1, col2 = st.columns([1, 1])
+with col_voice:
+    if st.button("🎤"):
+        recognizer = sr.Recognizer()
+        with sr.Microphone() as source:
+            st.info("Listening...")
+            audio = recognizer.listen(source)
+            try:
+                voice_text = recognizer.recognize_google(audio)
+                user_input = voice_text
+                st.info(f"Recognized: {voice_text}")
+            except sr.UnknownValueError:
+                st.error("Could not understand audio")
+            except sr.RequestError as e:
+                st.error(f"Error with speech recognition service: {e}")
 
-with col1:
-    if st.button("Send 🚀", key="send_button"):
-        if user_input.strip():
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            reply = get_ai_response(user_input)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
-            speak(reply)
-            st.rerun()
+with col_file:
+    uploaded_chat_file = st.file_uploader("", type=["jpg", "png", "jpeg", "pdf"], key="chat_file")
 
-with col2:
-    if st.button("🎤 Speak", key="speak_button"):
-        voice_text = recognize_speech()
-        if voice_text:
-            st.session_state.messages.append({"role": "user", "content": voice_text})
-            reply = get_ai_response(voice_text)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
-            speak(reply)
-            st.rerun()
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    c.execute("INSERT INTO chats (message, role) VALUES (?, 'user')", (user_input,))
+    conn.commit()
+    reply = get_ai_response(user_input, language)
+    st.session_state.messages.append({"role": "assistant", "content": reply})
+    c.execute("INSERT INTO chats (message, role) VALUES (?, 'assistant')", (reply,))
+    conn.commit()
+    if enable_tts:
+        speak(reply)
+    st.rerun()
 
-# ---------------------------
-# TEAM COLLABORATION (SIH Expansion)
-# ---------------------------
-st.subheader("🤝 Team AgriSense")
-st.markdown("""
-- **Leader**: [Your Name]
-- **Members**: [Member1, Member2, Member3]
-- **Tasks**: AI Integration, UI Design, Data Collection
-- **Status**: In Progress (Update live during SIH)
-""")
+if uploaded_chat_file and "file_processed" not in st.session_state:
+    if uploaded_chat_file.type in ["image/jpeg", "image/png"]:
+        analysis = analyze_crop_image(uploaded_chat_file, language)
+        st.session_state.messages.append({"role": "user", "content": "Uploaded image for analysis"})
+        st.session_state.messages.append({"role": "assistant", "content": analysis})
+        c.execute("INSERT INTO chats (message, role) VALUES (?, 'user')", ("Uploaded image",))
+        c.execute("INSERT INTO chats (message, role) VALUES (?, 'assistant')", (analysis,))
+        conn.commit()
+        if enable_tts:
+            speak(analysis)
+        st.session_state.file_processed = True
+        st.rerun()
 
 # ---------------------------
 # FOOTER
@@ -378,6 +431,8 @@ st.markdown("""
 st.markdown("""
     <hr style='border-color: #FFD700; border-width: 2px;'>
     <p style='text-align: center; color: black; font-size: 14px;'>
-        🌟 AgriSense | Smart India Hackathon 2025 | Empowering Farmers with AI 🚀 | © 2025 Team AgriSense
+        🌟 AgriSense | Empowering Farmers with AI 🚀 | © 2025 AgriSense
     </p>
 """, unsafe_allow_html=True)
+
+conn.close()
